@@ -46,7 +46,8 @@ function App() {
 
         do {
             result = await sdk.playlists.getPlaylistItems(match[1], 'DE', 'offset,limit,next,items(track(id,name,artists(name),album(release_date)))', limit, offset);
-            items.push(...result.items);
+            const filteredItems = result.items.filter(item => item.track?.name);
+            items.push(...filteredItems);
             offset += result.limit;
         } while (result.next !== null);
 
