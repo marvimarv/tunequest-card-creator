@@ -251,11 +251,13 @@ When creating your playlist you need to pay attention to select the original tra
                                                     }}></View>
                                                     <View style={{
                                                         width: "6.1cm",
+                                                        borderRight: rowIndex !== 3 ? "1px solid #000": undefined
                                                     }}>
                                                     </View>
                                                     <View style={{width: "6.2cm"}}></View>
                                                     <View style={{
                                                         width: "6.1cm",
+                                                        borderLeft: rowIndex !== 3 ? "1px solid #000": undefined,
                                                     }}></View>
                                                     <View style={{
                                                         width: "0.1cm",
@@ -371,7 +373,7 @@ When creating your playlist you need to pay attention to select the original tra
                                                 </View>
                                                 <View style={{
                                                     display: "flex",
-                                                    flexDirection: "row-reverse",
+                                                    flexDirection: "row",
                                                     height: "0.1cm"
                                                 }}>
                                                     <View style={{
@@ -381,11 +383,13 @@ When creating your playlist you need to pay attention to select the original tra
                                                     }}></View>
                                                     <View style={{
                                                         width: "6.1cm",
+                                                        borderRight: rowIndex !== 3 ? "1px solid #000": undefined
                                                     }}>
                                                     </View>
                                                     <View style={{width: "6.2cm"}}></View>
                                                     <View style={{
                                                         width: "6.1cm",
+                                                        borderLeft: rowIndex !== 3 ? "1px solid #000": undefined,
                                                     }}></View>
                                                     <View style={{
                                                         width: "0.1cm",
