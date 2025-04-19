@@ -1,12 +1,12 @@
 import { PlaylistedTrack, Scopes, SpotifyApi, Track } from "@spotify/web-api-ts-sdk";
-import React, { Fragment, useRef, useState } from "react";
+import React, { Fragment, useRef, useState, useEffect } from "react";
 import dayjs from 'dayjs'
 import { pdf } from '@react-pdf/renderer';
 import { Document, Image, Page as PDFPage, PDFViewer, Text, View } from "@react-pdf/renderer";
 import * as QRCode from 'qrcode';
 import { useSpotify } from "./hooks/useSpotify";
 import { getOriginalYearFromMusicBrainz } from "./utils/musicbrainz";
-
+import PDFContent from "./components/PDFContent";
 const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string;
 const redirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string;
 const playlistRegex = /^https:\/\/open\.spotify\.com\/playlist\/([a-zA-Z0-9-]+).*$/gm
@@ -33,14 +33,39 @@ function App() {
     const [playlistItems, setPlaylistItems] = useState<PlaylistedTrack<Track>[] | null>(null);
     const [name, setName] = useState<string>('');
     const [codeType, setCodeType] = useState('qr');
+    // steuert, ob der MusicBrainz‑Abgleich aktiv ist
+    const [useMusicBrainz, setUseMusicBrainz] = useState<boolean>(true);
     const inputRef = useRef<HTMLInputElement>(null);
     const sdk = useSpotify(clientId, redirectUri, [Scopes.playlistRead]);
+    const [codes, setCodes] = useState<string[]>([]);
+    const [logMessages, setLogMessages] = useState<string[]>([]);
+    const logBoxRef = useRef<HTMLDivElement>(null);
 
 const log = (level: "info" | "warn" | "error", ...args: any[]) => {
-    const timestamp = new Date().toISOString();
-    const message = `[${timestamp}] [${level.toUpperCase()}] ${args.map(a => typeof a === "object" ? JSON.stringify(a) : a).join(" ")}`;
-    console[level](message);
+  const timestamp = new Date().toISOString();
+  const message = `[${timestamp}] [${level.toUpperCase()}] ${args
+    .map((a) => (typeof a === "object" ? JSON.stringify(a) : a))
+    .join(" ")}`;
+  console[level](message);
+  setLogMessages((prev) => [...prev, message]);
 };
+
+useEffect(() => {
+  if (logBoxRef.current) {
+    logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight;
+  }
+}, [logMessages]);
+
+const generateCodes = async (items: PlaylistedTrack<Track>[]) => {
+    const generated = await Promise.all(
+      items.map(async (it) =>
+        codeType === "qr"
+          ? await generateSessionPDFQrCode(`spotify:track:${it.track.id}`)
+          : `https://scannables.scdn.co/uri/plain/jpeg/FFFFFF/black/320/spotify:track:${it.track.id}`
+      )
+    );
+    setCodes(generated);
+  };
 
 const getOriginalYear = async (trackId: string, fallback: string, trackName: string, artistName: string): Promise<string> => {
         if (!sdk) {
@@ -56,14 +81,21 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
  
             log("info", `Spotify-Jahr für "${trackName}" (${trackId}): ${realYear}, Fallback: ${fallbackYear}`);
  
-            const mbYear = await getOriginalYearFromMusicBrainz(trackName, artistName);
-            if (mbYear) {
-                const earliest = [mbYear, realYear, fallbackYear].sort()[0];
-                log("info", `Adjusted release year for "${trackName}" (${trackId}): ${fallbackYear} → ${earliest}`);
-                return earliest;
+            // Standard‑Vergleich Spotify vs. Fallback
+            let earliestYear = realYear < fallbackYear ? realYear : fallbackYear;
+
+            // ▶ MusicBrainz nur, wenn Checkbox aktiv
+            if (useMusicBrainz) {
+                const mbYear = await getOriginalYearFromMusicBrainz(trackName, artistName);
+                if (mbYear) {
+                    earliestYear = [mbYear, earliestYear].sort()[0];
+                    log("info", `MusicBrainz override für "${trackName}" (${trackId}): ${earliestYear}`);
+                }
+            } else {
+                log("info", `MusicBrainz‑Check deaktiviert – nutze Spotify/Fallback für "${trackName}"`);
             }
- 
-            return realYear < fallbackYear ? realYear : fallbackYear;
+
+            return earliestYear;
         } catch (e) {
             log("error", "getOriginalYear fehlgeschlagen für", trackId, e);
             log("info", `Using fallback release year for ${trackId}: ${fallback.slice(0, 4)}`);
@@ -103,10 +135,10 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
       
           const filteredItems = result.items.filter(item => item.track?.name);
           for (const it of filteredItems) {
-            const cleanedName = it.track.name
-              .replace(/ *- *Remaster(ed)?( *\d{4})?/gi, "")
-              .replace(/ *- *Version( *\d{4})?/gi, "")
-              .replace(/ *- *Stereo/gi, "")
+          const cleanedName = it.track.name
+              .replace(/ *[-–—:]? *(?:Remaster(?:ed)?|Re[- ]?master(?:ed)?(?: Version)?)(?: \d{4})?/gi, "")
+              .replace(/ *[-–—:]? *Version(?: \d{4})?/gi, "")
+              .replace(/ *[-–—:]? *Stereo/gi, "")
               .replace(/\(.*?\)/g, "")
               .replace(/\[.*?\]/g, "")
               .replace(/\s+/g, " ")
@@ -123,6 +155,7 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
       
         console.log("[DEBUG] Gesamtanzahl gefilterter Items:", items.length);
         setPlaylistItems(items);
+        generateCodes(items);
       };
 
   const setCardName = () => {
@@ -131,23 +164,41 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
 
   const handleDownload = async () => {
       if (!playlistItems) return;
-      const blob = await pdf(
-        <Document>
-          {arrayChunks(playlistItems, 12).map((pageChunks, pageIndex) => (
-            <PDFPage size="A4" key={`page-${pageIndex}`}>
-              {/* Seiteninhalt kann hier ggf. extrahiert oder dupliziert werden, falls gewünscht */}
-            </PDFPage>
-          ))}
-        </Document>
-      ).toBlob();
-      const url = URL.createObjectURL(blob);
+
+      // 1️⃣  Vorab alle Codes generieren
+      const codes = await Promise.all(
+        playlistItems.map(async (it) => {
+          const uri = codeType === "qr"
+            ? `spotify:track:${it.track.id}`
+            : `https://scannables.scdn.co/uri/plain/jpeg/FFFFFF/black/320/spotify:track:${it.track.id}`;
+
+          // QR‑Code generieren oder direkten Spotify‑Code zurückgeben
+          if (codeType === "qr") {
+            return await generateSessionPDFQrCode(uri);
+          }
+          return uri; // Spotify‑Code ist bereits eine URL
+        })
+      );
+
+      // 2️⃣  PDF zusammenbauen
+     const blob = await pdf(
+  <PDFContent
+    playlistItems={playlistItems}
+    name={name}
+    codeType={codeType}
+    codes={codes}
+  />
+).toBlob();
+
+      // 3️⃣  Download auslösen
+      const urlBlob = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
+      link.href = urlBlob;
       link.download = 'playlist-cards.pdf';
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      link.remove();
+      URL.revokeObjectURL(urlBlob);
     };
 
     return (
@@ -241,12 +292,37 @@ When creating your playlist you need to pay attention to select the original tra
 </select>
                       </div>
                   </div>
+
+                  <div className="col-span-1 sm:col-span-2 flex items-center">
+                    <input
+                      id="useMusicBrainz"
+                      type="checkbox"
+                      className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded"
+                      checked={useMusicBrainz}
+                      onChange={() => setUseMusicBrainz(!useMusicBrainz)}
+                    />
+                    <label htmlFor="useMusicBrainz" className="text-sm font-semibold leading-6 text-gray-900">
+                      MusicBrainz‑Check
+                    </label>
+                  </div>
                 </div>
+                {logMessages.length > 0 && (
+                        <div
+                          ref={logBoxRef}
+                          className="mx-auto mt-6 w-3/4 bg-gray-100 rounded-md p-4 shadow-inner max-h-60 overflow-y-auto">
+                          {logMessages.map((msg, idx) => (
+                            <p key={idx} className="text-xs font-mono whitespace-pre-line">
+                              {msg}
+                            </p>
+                          ))}
+                        </div>
+                      )}
             </div>
 
             {
                 playlistItems && (
                     <>
+
                       <div className="flex justify-center mt-6">
                         <button
                           onClick={handleDownload}
@@ -256,282 +332,13 @@ When creating your playlist you need to pay attention to select the original tra
                         </button>
                       </div>
                       <PDFViewer className="w-3/4 h-3/4 mx-auto mt-8">
-                        <Document>
-                            {arrayChunks(playlistItems, 12).map((pageChunks, pageIndex) => (
-                                  <Fragment key={`page-group-${pageIndex}`}>
-                                    <PDFPage size="A4" key={`page-${pageIndex}`} style={{
-                                        display: 'flex',
-                                        flexDirection: 'row',
-                                        flexWrap: 'wrap',
-                                        justifyContent: 'space-between',
-                                        padding: '30px'
-                                    }}>
-                                        <View style={{
-                                            display: "flex",
-                                            flexDirection: "row",
-                                            height: "0.1cm"
-                                        }}>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderBottom: "1px solid #000",
-                                                borderRight: "1px solid #000"
-                                            }}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderRight: "1px solid #000"
-                                            }}>
-                                            </View>
-                                            <View style={{width: "6.2cm"}}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderLeft: "1px solid #000",
-                                            }}></View>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderBottom: "1px solid #000",
-                                                borderLeft: "1px solid #000"
-                                            }}></View>
-                                        </View>
-                                        {arrayChunks(pageChunks, 3).map((rowChunk, rowIndex) => (
-                                            <View>
-                                                <View key={`row-${rowIndex}`}
-                                                      style={{
-                                                          display: "flex",
-                                                          flexDirection: "row",
-                                                      }}>
-                                                    {rowChunk.map(item => (
-                                                        <View key={item.track.id}
-                                                              style={{
-                                                                  //border: '1px solid #000',
-                                                                  width: '6.2cm',
-                                                                  height: '6.2cm',
-                                                                  textAlign: 'center',
-                                                                  display: 'flex',
-                                                                  justifyContent: 'center',
-                                                                  padding: '10px'
-                                                              }}>
-                                                            <Text style={{
-                                                                fontSize: '0.5cm',
-                                                            }}>
-                                                                {item.track.name}
-                                                            </Text>
-                                                            <Text style={{
-                                                                fontWeight: 900,
-                                                                fontSize: '1.5cm',
-                                                                marginTop: '10px',
-                                                                marginBottom: '10px'
-                                                            }}>
-                                                                {dayjs(item.track.album.release_date).format('YYYY')}
-                                                            </Text>
-                                                            <Text style={{
-                                                                fontSize: '0.5cm',
-                                                            }}>
-                                                                {item.track.artists.map(artist => artist.name).join(', ')}
-                                                            </Text>
-                                                            {name && (
-                                                                <Text style={{
-                                                                    fontSize: '0.2cm',
-                                                                    marginTop: '20px',
-                                                                }}>
-                                                                    {name}
-                                                                </Text>
-                                                            )}
-                                                        </View>
-                                                    ))}
-                                                </View>
-                                                <View style={{
-                                                    display: "flex",
-                                                    flexDirection: "row",
-                                                    height: "0.1cm"
-                                                }}>
-                                                    <View style={{
-                                                        width: "0.1cm",
-                                                        height: "0.1cm",
-                                                        borderBottom: "1px solid #000",
-                                                    }}></View>
-                                                    <View style={{
-                                                        width: "6.1cm",
-                                                        borderRight: rowIndex !== 3 ? "1px solid #000": undefined
-                                                    }}>
-                                                    </View>
-                                                    <View style={{width: "6.2cm"}}></View>
-                                                    <View style={{
-                                                        width: "6.1cm",
-                                                        borderLeft: rowIndex !== 3 ? "1px solid #000": undefined,
-                                                    }}></View>
-                                                    <View style={{
-                                                        width: "0.1cm",
-                                                        height: "0.1cm",
-                                                        borderBottom: "1px solid #000",
-                                                    }}></View>
-                                                </View>
-                                            </View>
-                                        ))}
-                                        <View style={{
-                                            display: "flex",
-                                            flexDirection: "row",
-                                            height: "0.1cm"
-                                        }}>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderRight: "1px solid #000"
-                                            }}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderRight: "1px solid #000"
-                                            }}>
-                                            </View>
-                                            <View style={{width: "6.2cm"}}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderLeft: "1px solid #000",
-                                            }}></View>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderLeft: "1px solid #000"
-                                            }}></View>
-                                        </View>
-                                    </PDFPage>
-                                    <PDFPage size="A4" key={`page-${pageIndex}`} style={{
-                                        display: 'flex',
-                                        flexDirection: 'row',
-                                        flexWrap: 'wrap',
-                                        justifyContent: 'space-between',
-                                        padding: '30px'
-                                    }}>
-                                        <View style={{
-                                            display: "flex",
-                                            flexDirection: "row",
-                                            height: "0.1cm"
-                                        }}>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderBottom: "1px solid #000",
-                                                borderRight: "1px solid #000"
-                                            }}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderRight: "1px solid #000"
-                                            }}>
-                                            </View>
-                                            <View style={{width: "6.2cm"}}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderLeft: "1px solid #000",
-                                            }}></View>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderBottom: "1px solid #000",
-                                                borderLeft: "1px solid #000"
-                                            }}></View>
-                                        </View>
-                                        {arrayChunks(pageChunks, 3).map((rowChunk, rowIndex) => (
-                                            <View>
-                                                <View key={`row-${rowIndex}`}
-                                                      style={{
-                                                          display: "flex",
-                                                          flexDirection: "row-reverse",
-                                                      }}>
-                                                    {rowChunk.map(item => (
-                                                        <>
-                                                            {codeType === 'qr' ? (
-                                                                <View key={item.track.id}
-                                                                      style={{
-                                                                          //border: '1px solid #000',
-                                                                          width: '6.2cm',
-                                                                          height: '6.2cm',
-                                                                          textAlign: 'center',
-                                                                          display: 'flex',
-                                                                          justifyContent: 'center',
-                                                                          padding: '10px'
-                                                                      }}>
-                                                                    <Image src={generateSessionPDFQrCode(`spotify:track:${item.track.id}`)}
-                                                                           style={{width: '4cm', margin: '0 auto'}}/>
-                                                                </View>
-                                                            ) : (
-                                                                <View key={item.track.id}
-                                                                      style={{
-                                                                          //border: '1px solid #000',
-                                                                          width: '6.2cm',
-                                                                          height: '6.2cm',
-                                                                          textAlign: 'center',
-                                                                          display: 'flex',
-                                                                          justifyContent: 'center',
-                                                                          padding: '10px'
-                                                                      }}>
-                                                                    <Image src={`https://scannables.scdn.co/uri/plain/jpeg/FFFFFF/black/320/spotify:track:` + item.track.id}
-                                                                           style={{width: '4cm', margin: '0 auto'}}/>
-                                                                </View>
-                                                            )}
-                                                        </>
-
-                                                    ))}
-                                                </View>
-                                                <View style={{
-                                                    display: "flex",
-                                                    flexDirection: "row",
-                                                    height: "0.1cm"
-                                                }}>
-                                                    <View style={{
-                                                        width: "0.1cm",
-                                                        height: "0.1cm",
-                                                        borderBottom: "1px solid #000",
-                                                    }}></View>
-                                                    <View style={{
-                                                        width: "6.1cm",
-                                                        borderRight: rowIndex !== 3 ? "1px solid #000": undefined
-                                                    }}>
-                                                    </View>
-                                                    <View style={{width: "6.2cm"}}></View>
-                                                    <View style={{
-                                                        width: "6.1cm",
-                                                        borderLeft: rowIndex !== 3 ? "1px solid #000": undefined,
-                                                    }}></View>
-                                                    <View style={{
-                                                        width: "0.1cm",
-                                                        height: "0.1cm",
-                                                        borderBottom: "1px solid #000",
-                                                    }}></View>
-                                                </View>
-                                            </View>
-                                        ))}
-                                        <View style={{
-                                            display: "flex",
-                                            flexDirection: "row",
-                                            height: "0.1cm"
-                                        }}>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderRight: "1px solid #000"
-                                            }}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderRight: "1px solid #000"
-                                            }}>
-                                            </View>
-                                            <View style={{width: "6.2cm"}}></View>
-                                            <View style={{
-                                                width: "6.1cm",
-                                                borderLeft: "1px solid #000",
-                                            }}></View>
-                                            <View style={{
-                                                width: "0.1cm",
-                                                height: "0.1cm",
-                                                borderLeft: "1px solid #000"
-                                            }}></View>
-                                        </View>
-                                    </PDFPage>
-                                </Fragment>
-                            ))}
-                        </Document>
-                    </PDFViewer>
+  <PDFContent
+    playlistItems={playlistItems}
+    name={name}
+    codeType={codeType}
+    codes={codes}
+  />
+</PDFViewer>
                     </>
                 )}
         </div>
