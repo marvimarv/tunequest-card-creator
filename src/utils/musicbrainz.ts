@@ -3,48 +3,50 @@ function delay(ms: number): Promise<void> {
 }
 
 export async function getOriginalYearFromMusicBrainz(trackName: string, artistName: string): Promise<string | null> {
-    const query = `recording:"${trackName}" AND artist:"${artistName}"`;
-    const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json&limit=5`;
-  
+  const query = `recording:"${trackName}" AND artist:"${artistName}"`;
+  const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json&limit=5`;
+
+  let attempts = 0;
+  const maxAttempts = 5;
+
+  while (attempts < maxAttempts) {
     try {
-      let attempts = 0;
-      let response: Response | null = null;
-
-      while (attempts < 3) {
-        await delay(1100); // Rate-Limit: max. 1 Request pro Sekunde
-        response = await fetch(url, {
-          headers: {
-            'User-Agent': 'tunequest-card-creator/1.0 (marvin@example.com)'
-          }
-        });
-
-        if (response.status === 503) {
-          console.warn(`[WARN] MusicBrainz API antwortet mit 503. Versuch ${attempts + 1}/3…`);
-          await delay(3000); // warte 3 Sekunden und versuche erneut
-          attempts++;
-          continue;
+      await delay(1200); // >1s Abstand wegen Rate Limit
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'tunequest-card-creator/1.0 (marvin@example.com)'
         }
+      });
 
-        break;
+      if (response.status === 503) {
+        console.warn(`[WARN] MusicBrainz API 503 für "${trackName}" (${artistName}) – Versuch ${attempts + 1}/${maxAttempts}`);
+        attempts++;
+        await delay(3000); // warte länger und versuche erneut
+        continue;
       }
 
-      if (!response || !response.ok) {
-        console.warn("[WARN] MusicBrainz API Fehler:", response?.status);
+      if (!response.ok) {
+        console.warn(`[WARN] MusicBrainz API Fehler ${response.status} für "${trackName}"`);
         return null;
       }
 
       const data = await response.json();
-
       const years = data.recordings
-        .map((rec: any) => rec['first-release-date'])
+        .map((rec: { 'first-release-date'?: string }) => rec['first-release-date'])
         .filter((date: string) => !!date)
         .map((date: string) => date.slice(0, 4));
 
-      return years.length > 0 ? years.sort()[0] : null; // ältestes Jahr
+      return years.length > 0 ? years.sort()[0] : null;
+
     } catch (e) {
-      console.error("[ERROR] MusicBrainz Fehler:", e);
-      return null;
+      console.error(`[ERROR] MusicBrainz Fehler bei "${trackName}" (${artistName}):`, e);
+      attempts++;
+      await delay(3000); // ebenfalls etwas warten
     }
+  }
+
+  console.warn(`[FAIL] MusicBrainz: Alle Versuche fehlgeschlagen für "${trackName}"`);
+  return null;
 }
 
 export async function getOriginalYearBatch(

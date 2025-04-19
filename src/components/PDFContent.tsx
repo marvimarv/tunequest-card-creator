@@ -44,7 +44,7 @@ import {
             >
               {/* obere Hilfslinie */}
               <GuideRow top />
-              {/* 3 × 4 Karten‑Raster */}
+              {/* 3x4 Karten‑Raster */}
               {chunk(pageTracks, 3).map((rowTracks, rowIndex) => (
                 <Fragment key={`row-${rowIndex}`}>
                   <View
