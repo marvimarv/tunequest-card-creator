@@ -1,15 +1,18 @@
 import { PlaylistedTrack, Scopes, SpotifyApi, Track } from "@spotify/web-api-ts-sdk";
-import { useRef, useState } from "react";
+import React, { Fragment, useRef, useState } from "react";
 import dayjs from 'dayjs'
+import { pdf } from '@react-pdf/renderer';
 import { Document, Image, Page as PDFPage, PDFViewer, Text, View } from "@react-pdf/renderer";
 import * as QRCode from 'qrcode';
+import { useSpotify } from "./hooks/useSpotify";
+import { getOriginalYearFromMusicBrainz } from "./utils/musicbrainz";
 
 const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string;
 const redirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string;
-
 const playlistRegex = /^https:\/\/open\.spotify\.com\/playlist\/([a-zA-Z0-9-]+).*$/gm
 
-const arrayChunks = (array: PlaylistedTrack<Track>[], chunkSize: number) => Array(Math.ceil(array.length / chunkSize))
+
+  const arrayChunks = (array: PlaylistedTrack<Track>[], chunkSize: number) => Array(Math.ceil(array.length / chunkSize))
     .fill(null)
     .map((_, index) => index * chunkSize)
     .map(begin => array.slice(begin, begin + chunkSize));
@@ -31,32 +34,115 @@ function App() {
     const [name, setName] = useState<string>('');
     const [codeType, setCodeType] = useState('qr');
     const inputRef = useRef<HTMLInputElement>(null);
-    const sdk = SpotifyApi.withUserAuthorization(clientId, redirectUri, Scopes.playlistRead);
+    const sdk = useSpotify(clientId, redirectUri, [Scopes.playlistRead]);
 
+    const getOriginalYear = async (trackId: string, fallback: string, trackName: string, artistName: string): Promise<string> => {
+        if (!sdk) {
+            console.warn("[WARN] SDK noch nicht initialisiert für", trackId);
+            return fallback.slice(0, 4);
+        }
+        try {
+            const track = await sdk.tracks.get(trackId, "DE");
+            await new Promise(res => setTimeout(res, 100)); // Rate-Limit-Pause
+ 
+            const realYear = track.album.release_date.slice(0, 4);
+            const fallbackYear = fallback.slice(0, 4);
+ 
+            console.log(`[INFO] Spotify-Jahr für "${trackName}" (${trackId}): ${realYear}, Fallback: ${fallbackYear}`);
+ 
+            const mbYear = await getOriginalYearFromMusicBrainz(trackName, artistName);
+            if (mbYear) {
+                const earliest = [mbYear, realYear, fallbackYear].sort()[0];
+                console.log(`[INFO] Adjusted release year for "${trackName}" (${trackId}): ${fallbackYear} → ${earliest}`);
+                return earliest;
+            }
+ 
+            return realYear < fallbackYear ? realYear : fallbackYear;
+        } catch (e) {
+            console.error("[ERROR] getOriginalYear fehlgeschlagen für", trackId, e);
+            console.log(`[INFO] Using fallback release year for ${trackId}: ${fallback.slice(0, 4)}`);
+            return fallback.slice(0, 4);
+        }
+    };
+    
     const getPlaylist = async () => {
         const match = playlistRegex.exec(url);
         if (!match) {
-            return;
+          console.log("[DEBUG] Keine gültige Playlist‑URL");
+          return;
         }
-
+      
+        const playlistId = match[1];
+        console.log("[DEBUG] Playlist‑ID:", playlistId);
+      
         const items: PlaylistedTrack<Track>[] = [];
         const limit = 50;
         let result = null;
         let offset = 0;
-
+      
         do {
-            result = await sdk.playlists.getPlaylistItems(match[1], 'DE', 'offset,limit,next,items(track(id,name,artists(name),album(release_date)))', limit, offset);
-            const filteredItems = result.items.filter(item => item.track?.name);
-            items.push(...filteredItems);
-            offset += result.limit;
+          result = await sdk.playlists.getPlaylistItems(
+            playlistId,
+            "DE",
+            "offset,limit,next,items(track(id,name,artists(name),album(release_date)))",
+            limit,
+            offset
+          );
+      
+          console.log("[DEBUG] Batch erhalten:", {
+            offset,
+            received: result.items.length,
+            next: result.next,
+          });
+      
+          const filteredItems = result.items.filter(item => item.track?.name);
+          for (const it of filteredItems) {
+            const cleanedName = it.track.name
+              .replace(/ *- *Remaster(ed)?( *\d{4})?/gi, "")
+              .replace(/ *- *Version( *\d{4})?/gi, "")
+              .replace(/ *- *Stereo/gi, "")
+              .replace(/\(.*?\)/g, "")
+              .replace(/\[.*?\]/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const artistName = it.track.artists[0]?.name ?? '';
+            const origYear = await getOriginalYear(it.track.id, it.track.album.release_date, cleanedName, artistName);
+            it.track.name = cleanedName;
+            it.track.album.release_date = origYear;
+          }
+          items.push(...filteredItems);
+      
+          offset += result.limit;
         } while (result.next !== null);
-
+      
+        console.log("[DEBUG] Gesamtanzahl gefilterter Items:", items.length);
         setPlaylistItems(items);
-    }
+      };
 
-    const setCardName = () => {
-        setName(inputRef.current?.value ?? '');
-    }
+  const setCardName = () => {
+      setName(inputRef.current?.value ?? '');
+  }
+
+  const handleDownload = async () => {
+      if (!playlistItems) return;
+      const blob = await pdf(
+        <Document>
+          {arrayChunks(playlistItems, 12).map((pageChunks, pageIndex) => (
+            <PDFPage size="A4" key={`page-${pageIndex}`}>
+              {/* Seiteninhalt kann hier ggf. extrahiert oder dupliziert werden, falls gewünscht */}
+            </PDFPage>
+          ))}
+        </Document>
+      ).toBlob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'playlist-cards.pdf';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
 
     return (
         <div className="w-full h-screen overflow-scroll">
@@ -137,15 +223,16 @@ When creating your playlist you need to pay attention to select the original tra
                           Select Code Type
                       </label>
                       <div className="mt-2.5">
-                          <select
-                              id="codeType"
-                              name="codeType"
-                              className="block w-full rounded-md border-0 px-3.5 py-2 shadow-sm ring-1 ring-inset focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6"
-                              onChange={e => setCodeType(e.target.value)}
-                          >
-                              <option value="qr" selected>QR Code</option>
-                              <option value="spotify">Spotify Code</option>
-                          </select>
+                      <select
+  id="codeType"
+  name="codeType"
+  value={codeType}
+  onChange={e => setCodeType(e.target.value)}
+  className="…"
+>
+  <option value="qr">QR Code</option>
+  <option value="spotify">Spotify Code</option>
+</select>
                       </div>
                   </div>
                 </div>
@@ -153,10 +240,19 @@ When creating your playlist you need to pay attention to select the original tra
 
             {
                 playlistItems && (
-                    <PDFViewer className="w-3/4 h-3/4 mx-auto mt-8">
+                    <>
+                      <div className="flex justify-center mt-6">
+                        <button
+                          onClick={handleDownload}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-500"
+                        >
+                          Download PDF
+                        </button>
+                      </div>
+                      <PDFViewer className="w-3/4 h-3/4 mx-auto mt-8">
                         <Document>
                             {arrayChunks(playlistItems, 12).map((pageChunks, pageIndex) => (
-                                <>
+                                  <Fragment key={`page-group-${pageIndex}`}>
                                     <PDFPage size="A4" key={`page-${pageIndex}`} style={{
                                         display: 'flex',
                                         flexDirection: 'row',
@@ -426,10 +522,11 @@ When creating your playlist you need to pay attention to select the original tra
                                             }}></View>
                                         </View>
                                     </PDFPage>
-                                </>
+                                </Fragment>
                             ))}
                         </Document>
                     </PDFViewer>
+                    </>
                 )}
         </div>
     )
