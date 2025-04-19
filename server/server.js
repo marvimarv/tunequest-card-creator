@@ -6,7 +6,7 @@ const app = express();
 const port = 3005;
 
 app.use(cors());
-app.use('/api/musicbrainz', musicbrainzProxy);
+app.use('/musicbrainz', musicbrainzProxy);
 
 app.listen(port, () => {
   console.log(`MusicBrainz proxy server running on port ${port}`);
