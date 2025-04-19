@@ -4,24 +4,18 @@ function delay(ms: number): Promise<void> {
 
 export async function getOriginalYearFromMusicBrainz(trackName: string, artistName: string): Promise<string | null> {
   const query = `recording:"${trackName}" AND artist:"${artistName}"`;
-  const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json&limit=5`;
+  const url = `/api/musicbrainz/year?track=${encodeURIComponent(trackName)}&artist=${encodeURIComponent(artistName)}`;
 
-  let attempts = 0;
-  const maxAttempts = 5;
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY_MS = 3000;
 
-  while (attempts < maxAttempts) {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      await delay(1200); // >1s Abstand wegen Rate Limit
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'tunequest-card-creator/1.0 (marvin@example.com)'
-        }
-      });
+      const response = await fetch(url);
 
       if (response.status === 503) {
-        console.warn(`[WARN] MusicBrainz API 503 für "${trackName}" (${artistName}) – Versuch ${attempts + 1}/${maxAttempts}`);
-        attempts++;
-        await delay(3000); // warte länger und versuche erneut
+        console.warn(`MusicBrainz 503 - retrying (${attempt + 1}/${MAX_RETRIES})`);
+        await delay(RETRY_DELAY_MS);
         continue;
       }
 
@@ -31,21 +25,14 @@ export async function getOriginalYearFromMusicBrainz(trackName: string, artistNa
       }
 
       const data = await response.json();
-      const years = data.recordings
-        .map((rec: { 'first-release-date'?: string }) => rec['first-release-date'])
-        .filter((date: string) => !!date)
-        .map((date: string) => date.slice(0, 4));
-
-      return years.length > 0 ? years.sort()[0] : null;
+      return data.year ?? null;
 
     } catch (e) {
       console.error(`[ERROR] MusicBrainz Fehler bei "${trackName}" (${artistName}):`, e);
-      attempts++;
-      await delay(3000); // ebenfalls etwas warten
+      await delay(RETRY_DELAY_MS);
     }
   }
 
-  console.warn(`[FAIL] MusicBrainz: Alle Versuche fehlgeschlagen für "${trackName}"`);
   return null;
 }
 
