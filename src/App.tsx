@@ -1,8 +1,7 @@
-import { PlaylistedTrack, Scopes, SpotifyApi, Track } from "@spotify/web-api-ts-sdk";
-import React, { Fragment, useRef, useState, useEffect } from "react";
-import dayjs from 'dayjs'
+import { PlaylistedTrack, Scopes, Track } from "@spotify/web-api-ts-sdk";
+import { useRef, useState, useEffect } from "react";
 import { pdf } from '@react-pdf/renderer';
-import { Document, Image, Page as PDFPage, PDFViewer, Text, View } from "@react-pdf/renderer";
+import { PDFViewer } from "@react-pdf/renderer";
 import * as QRCode from 'qrcode';
 import { useSpotify } from "./hooks/useSpotify";
 import { getOriginalYearFromMusicBrainz } from "./utils/musicbrainz";
@@ -32,16 +31,17 @@ function App() {
     const [url, setUrl] = useState<string>('');
     const [playlistItems, setPlaylistItems] = useState<PlaylistedTrack<Track>[] | null>(null);
     const [name, setName] = useState<string>('');
-    const [codeType, setCodeType] = useState('qr');
+// statt: useState('qr')
+const [codeType, setCodeType] = useState<'qr' | 'spotify'>('qr');
     // steuert, ob der MusicBrainz‑Abgleich aktiv ist
     const [useMusicBrainz, setUseMusicBrainz] = useState<boolean>(true);
     const inputRef = useRef<HTMLInputElement>(null);
-    const sdk = useSpotify(clientId, redirectUri, [Scopes.playlistRead]);
+    const sdk = useSpotify(clientId, redirectUri, Scopes.playlistRead);
     const [codes, setCodes] = useState<string[]>([]);
     const [logMessages, setLogMessages] = useState<string[]>([]);
     const logBoxRef = useRef<HTMLDivElement>(null);
 
-const log = (level: "info" | "warn" | "error", ...args: any[]) => {
+    const log = (level: "info" | "warn" | "error", ...args: unknown[]) => {
   const timestamp = new Date().toISOString();
   const message = `[${timestamp}] [${level.toUpperCase()}] ${args
     .map((a) => (typeof a === "object" ? JSON.stringify(a) : a))
@@ -73,7 +73,7 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
             return fallback.slice(0, 4);
         }
         try {
-            const track = await sdk.tracks.get(trackId, "DE");
+            const track = await sdk!.tracks.get(trackId, "DE");
             await new Promise(res => setTimeout(res, 100)); // Rate-Limit-Pause
  
             const realYear = track.album.release_date.slice(0, 4);
@@ -119,7 +119,7 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
         let offset = 0;
       
         do {
-          result = await sdk.playlists.getPlaylistItems(
+          result = await sdk!.playlists.getPlaylistItems(
             playlistId,
             "DE",
             "offset,limit,next,items(track(id,name,artists(name),album(release_date)))",
@@ -134,19 +134,36 @@ const getOriginalYear = async (trackId: string, fallback: string, trackName: str
           });
       
           const filteredItems = result.items.filter(item => item.track?.name);
-          for (const it of filteredItems) {
-          const cleanedName = it.track.name
-              .replace(/ *[-–—:]? *(?:Remaster(?:ed)?|Re[- ]?master(?:ed)?(?: Version)?)(?: \d{4})?/gi, "")
-              .replace(/ *[-–—:]? *Version(?: \d{4})?/gi, "")
-              .replace(/ *[-–—:]? *Stereo/gi, "")
-              .replace(/\(.*?\)/g, "")
-              .replace(/\[.*?\]/g, "")
-              .replace(/\s+/g, " ")
-              .trim();
-            const artistName = it.track.artists[0]?.name ?? '';
-            const origYear = await getOriginalYear(it.track.id, it.track.album.release_date, cleanedName, artistName);
-            it.track.name = cleanedName;
-            it.track.album.release_date = origYear;
+          // Process filtered items in chunks to respect Spotify rate limits
+          const chunks = arrayChunks(filteredItems, 5);
+          for (const chunk of chunks) {
+            // Fetch original years concurrently within each chunk
+            const origYears = await Promise.all(chunk.map(it => {
+              const cleanedName = it.track.name
+                .replace(/ *[-–—:]? *(?:Remaster(?:ed)?|Re[- ]?master(?:ed)?(?: Version)?)(?: \d{4})?/gi, "")
+                .replace(/ *[-–—:]? *Version(?: \d{4})?/gi, "")
+                .replace(/ *[-–—:]? *Stereo/gi, "")
+                .replace(/\(.*?\)/g, "")
+                .replace(/\[.*?\]/g, "")
+                .replace(/\s+/g, " ")
+                .trim();
+              const artistName = it.track.artists[0]?.name ?? '';
+              return getOriginalYear(it.track.id, it.track.album.release_date, cleanedName, artistName);
+            }));
+            // Apply cleaned names and years back to items
+            chunk.forEach((it, idx) => {
+              it.track.name = it.track.name
+                .replace(/ *[-–—:]? *(?:Remaster(?:ed)?|Re[- ]?master(?:ed)?(?: Version)?)(?: \d{4})?/gi, "")
+                .replace(/ *[-–—:]? *Version(?: \d{4})?/gi, "")
+                .replace(/ *[-–—:]? *Stereo/gi, "")
+                .replace(/\(.*?\)/g, "")
+                .replace(/\[.*?\]/g, "")
+                .replace(/\s+/g, " ")
+                .trim();
+              it.track.album.release_date = origYears[idx];
+            });
+            // Pause between chunks
+            await new Promise(res => setTimeout(res, 500));
           }
           items.push(...filteredItems);
       
@@ -284,7 +301,7 @@ When creating your playlist you need to pay attention to select the original tra
   id="codeType"
   name="codeType"
   value={codeType}
-  onChange={e => setCodeType(e.target.value)}
+  onChange={e => setCodeType(e.target.value as 'qr' | 'spotify')}
   className="…"
 >
   <option value="qr">QR Code</option>
