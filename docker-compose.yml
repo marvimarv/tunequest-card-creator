@@ -1,10 +1,11 @@
+version: "3.8"
+
 services:
-  tunequest-create:
-    image: nginx
-    volumes:
-      - ./dist:/usr/share/nginx/html
-    container_name: tunequest-create
+  tunequest-card-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile            # see Dockerfile below
+    container_name: tunequest-card-generator
     ports:
-      - 5173:80
-    tty: true
-    stdin_open: true
+      - "3004:80"                       # container:80 → host:3004
+    restart: always
