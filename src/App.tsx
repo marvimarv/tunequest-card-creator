@@ -36,9 +36,15 @@ function App() {
     const inputRef = useRef<HTMLInputElement>(null);
     const sdk = useSpotify(clientId, redirectUri, [Scopes.playlistRead]);
 
-    const getOriginalYear = async (trackId: string, fallback: string, trackName: string, artistName: string): Promise<string> => {
+const log = (level: "info" | "warn" | "error", ...args: any[]) => {
+    const timestamp = new Date().toISOString();
+    const message = `[${timestamp}] [${level.toUpperCase()}] ${args.map(a => typeof a === "object" ? JSON.stringify(a) : a).join(" ")}`;
+    console[level](message);
+};
+
+const getOriginalYear = async (trackId: string, fallback: string, trackName: string, artistName: string): Promise<string> => {
         if (!sdk) {
-            console.warn("[WARN] SDK noch nicht initialisiert für", trackId);
+        log("warn", "SDK noch nicht initialisiert für", trackId);
             return fallback.slice(0, 4);
         }
         try {
@@ -48,19 +54,19 @@ function App() {
             const realYear = track.album.release_date.slice(0, 4);
             const fallbackYear = fallback.slice(0, 4);
  
-            console.log(`[INFO] Spotify-Jahr für "${trackName}" (${trackId}): ${realYear}, Fallback: ${fallbackYear}`);
+            log("info", `Spotify-Jahr für "${trackName}" (${trackId}): ${realYear}, Fallback: ${fallbackYear}`);
  
             const mbYear = await getOriginalYearFromMusicBrainz(trackName, artistName);
             if (mbYear) {
                 const earliest = [mbYear, realYear, fallbackYear].sort()[0];
-                console.log(`[INFO] Adjusted release year for "${trackName}" (${trackId}): ${fallbackYear} → ${earliest}`);
+                log("info", `Adjusted release year for "${trackName}" (${trackId}): ${fallbackYear} → ${earliest}`);
                 return earliest;
             }
  
             return realYear < fallbackYear ? realYear : fallbackYear;
         } catch (e) {
-            console.error("[ERROR] getOriginalYear fehlgeschlagen für", trackId, e);
-            console.log(`[INFO] Using fallback release year for ${trackId}: ${fallback.slice(0, 4)}`);
+            log("error", "getOriginalYear fehlgeschlagen für", trackId, e);
+            log("info", `Using fallback release year for ${trackId}: ${fallback.slice(0, 4)}`);
             return fallback.slice(0, 4);
         }
     };
