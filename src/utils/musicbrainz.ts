@@ -3,7 +3,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export async function getOriginalYearFromMusicBrainz(trackName: string, artistName: string): Promise<string | null> {
-  const query = `recording:"${trackName}" AND artist:"${artistName}"`;
+  //const query = `recording:"${trackName}" AND artist:"${artistName}"`;
   const url = `/api/musicbrainz/year?track=${encodeURIComponent(trackName)}&artist=${encodeURIComponent(artistName)}`;
 
   const MAX_RETRIES = 5;
