@@ -25,7 +25,6 @@ import {
   export default function PDFContent({
     playlistItems,
     name,
-    codeType,
     codes,
   }: Props) {
     return (
